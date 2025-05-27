@@ -109,11 +109,12 @@ class SpektrumRunner(object):
         return False
 
     def filter_by_module_name(self, classes, name):
-        found = [
-            cls
+        found_classes = {
+            name: cls
             for cls in classes
-            if name in '{}.{}'.format(cls.__module__, cls.__name__)
-        ]
+            if name == (cls.__module__.split('.') or cls.__module__)[-1]
+        }
+        found = list(found_classes.values())
 
         if not found:
             found = []

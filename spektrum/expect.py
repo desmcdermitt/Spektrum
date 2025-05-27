@@ -5,7 +5,7 @@ import inspect
 from spektrum import logger, utils
 from spektrum.spec import Spec
 from spektrum.exceptions import FailedRequireException
-from spektrum.vendor.ast_decompiler import decompile
+from ast_decompiler import decompile
 
 log = logger.get(__name__)
 

@@ -36,6 +36,7 @@ setup(
         'httpx>=0.23.0',
         'python-dateutil>=2.8.2',
         'pyyaml',
+        'ast-decompiler'
     ],
     entry_points = {
         'console_scripts': [
