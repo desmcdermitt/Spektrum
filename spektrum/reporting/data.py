@@ -168,11 +168,15 @@ class ExpectFormatData(object):
 
     @property
     def target_name(self):
-        return self._expect.src_params.expect_arg
+        if self._expect.src_params:
+            return self._expect.src_params.expect_arg
+        return str(self._expect.target)
 
     @property
     def expected_name(self):
-        return self._expect.src_params.cmp_arg
+        if self._expect.src_params:
+            return self._expect.src_params.cmp_arg
+        return str(self._expect.expected)
 
     @property
     def as_dict(self):
