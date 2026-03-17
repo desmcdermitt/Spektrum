@@ -45,6 +45,9 @@ def main(argv=None):
             ]
         }
 
+    live_port = arguments.live_port if arguments.live else None
+    live_linger = arguments.live_linger if arguments.live else 0
+
     runner = SpektrumRunner(
         reporting_options={
             'show_all_expects': arguments.show_all_expects,
@@ -58,6 +61,8 @@ def main(argv=None):
             'tr_run': arguments.tr_run,
         },
         concurrency=concurrency,
+        live_port=live_port,
+        live_linger=live_linger,
     )
 
     if arguments.coverage:
@@ -226,6 +231,32 @@ def setup_argparse():
         default=[],
         nargs='*'
     )
+
+    parser.add_argument(
+        '--live',
+        dest='live',
+        action='store_true',
+        help='Starts a live progress HTTP server during test execution',
+    )
+
+    parser.add_argument(
+        '--live-port',
+        dest='live_port',
+        metavar='',
+        default=7777,
+        type=int,
+        help='Port for the live progress server (default: 7777)',
+    )
+
+    parser.add_argument(
+        '--live-linger',
+        dest='live_linger',
+        metavar='',
+        default=5,
+        type=int,
+        help='Seconds to keep live server up after run completes (default: 5)',
+    )
+
     return parser
 
 

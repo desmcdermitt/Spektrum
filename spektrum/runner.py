@@ -7,8 +7,10 @@ from pike.manager import PikeManager
 from spektrum import logger, utils
 
 from spektrum.exceptions import FailedRequireException
+from spektrum.expect import _LIVE_CTX
 from spektrum.spec import get_case_data, Spec, spec_filter, find_children
 from spektrum.reporting.core import ReportManager
+from spektrum.reporting.data import CaseFormatData
 from spektrum.reporting.pretty import PrettyRenderer
 from spektrum.reporting.xunit import XUnitRenderer
 
@@ -17,16 +19,46 @@ log = logger.get(__name__)
 
 
 class SpektrumRunner(object):
-    def __init__(self, reporting_options=None, concurrency=1):
+    def __init__(self, reporting_options=None, concurrency=1, event_queue=None, live_port=None, live_linger=5):
         self.spec_semaphore = asyncio.Semaphore(concurrency)
         self.test_semaphore = asyncio.Semaphore(concurrency)
         self.reporting = ReportManager(reporting_options)
         self.renderer = PrettyRenderer(reporting_options)
         self.xunit_renderer = XUnitRenderer(reporting_options)
+        self.event_queue = event_queue
+        self.live_port = live_port
+        self.live_linger = live_linger
 
     def run(self, search_paths, module_name=None, metadata=None, test_names=None, exclude=None,
             dry_run=False):
         loop = asyncio.get_event_loop()
+        return loop.run_until_complete(
+            self._async_run(loop, search_paths, module_name, metadata, test_names, exclude, dry_run)
+        )
+
+    async def _async_run(self, loop, search_paths, module_name=None, metadata=None,
+                         test_names=None, exclude=None, dry_run=False):
+        # Start live server first so it stays alive for the entire run under one
+        # event loop iteration — no gap between server start and test execution.
+        live_server = None
+        if self.live_port:
+            if not self.event_queue:
+                self.event_queue = asyncio.Queue()
+            from spektrum.reporting.live import LiveServer
+            live_server = LiveServer(self.live_port, self.event_queue, linger=self.live_linger)
+            await live_server.start()
+            print(f'Live view: http://localhost:{self.live_port}', flush=True)
+
+        # Emit run context as the first queue event whenever a queue is active
+        if self.event_queue:
+            self.event_queue.put_nowait({
+                'type': 'run-started',
+                'search_path': search_paths[0],
+                'module_name': module_name,
+            })
+            # Yield so the consumer task processes run-started and any waiting
+            # HTTP connections are accepted before synchronous discovery begins.
+            await asyncio.sleep(0)
 
         with PikeManager(search_paths) as mgr:
             all_inherited = mgr.get_all_inherited_classes(Spec)
@@ -51,23 +83,14 @@ class SpektrumRunner(object):
                 exclude
             )
 
-            # TODO(jmvrbanac): Change how nested specs are executed
-            # coroutines = []
-            # for cls in selected_modules:
-            #     exc_func = execute_spec
-            #     spec = cls()
-
-            #     if spec.__parent_cls__:
-            #         exc_func = execute_nested_spec
-
-            #     coroutines.append(
-            #         exc_func(spec, self.semaphore, self.reporting, metadata, test_names)
-            #     )
-
-            # future = asyncio.gather(*coroutines)
-
             self.reporting.start_reporting(dry_run)
-            future = asyncio.gather(*[
+
+            # Emit spec-discovered for all top-level specs (and their children)
+            if self.event_queue:
+                for spec in instantiated:
+                    await _emit_spec_discovered(spec, self.event_queue)
+
+            await asyncio.gather(*[
                 execute_spec(
                     spec,
                     self.spec_semaphore,
@@ -77,18 +100,31 @@ class SpektrumRunner(object):
                     test_names,
                     exclude,
                     dry_run=dry_run,
+                    event_queue=self.event_queue,
                 )
                 for spec in instantiated
             ])
 
-            loop.run_until_complete(future)
-            print('\n', flush=True)
+            # Emit run-complete event
+            if self.event_queue:
+                passed, failed, skipped = _count_results(self.reporting.specs)
+                await self.event_queue.put({
+                    'type': 'run-complete',
+                    'passed': passed,
+                    'failed': failed,
+                    'skipped': skipped,
+                })
 
-            report = self.reporting.build_report()
-            self.renderer.render(report)
+        print('\n', flush=True)
 
-            if self.xunit_renderer.filename:
-                self.xunit_renderer.render(report)
+        report = self.reporting.build_report()
+        self.renderer.render(report)
+
+        if self.xunit_renderer.filename:
+            self.xunit_renderer.render(report)
+
+        if live_server:
+            await live_server.shutdown()
 
         return self.reporting.success
 
@@ -139,6 +175,41 @@ class SpektrumRunner(object):
         return found
 
 
+def _count_results(specs):
+    passed = 0
+    failed = 0
+    skipped = 0
+    for spec in specs.values():
+        for case in spec.__test_cases__:
+            data = CaseFormatData(spec, case)
+            if data.skipped or data.incomplete:
+                skipped += 1
+            elif data.successful:
+                passed += 1
+            else:
+                failed += 1
+    return passed, failed, skipped
+
+
+async def _emit_spec_discovered(spec, queue):
+    cases = [
+        {
+            'name': case.__name__,
+            'display_name': utils.snakecase_to_spaces(case.__name__),
+        }
+        for case in spec.__test_cases__
+    ]
+    await queue.put({
+        'type': 'spec-discovered',
+        'spec_id': spec._id,
+        'spec_name': type(spec).__name__,
+        'spec_display_name': utils.camelcase_to_spaces(type(spec).__name__),
+        'cases': cases,
+    })
+    for child in spec.children:
+        await _emit_spec_discovered(child, queue)
+
+
 async def execute_nested_spec(spec, semaphore, reporting, metadata=None, test_names=None,
                               exclude=None, dry_run=False):
     parents = []
@@ -184,7 +255,8 @@ async def execute_nested_spec(spec, semaphore, reporting, metadata=None, test_na
 
 
 async def execute_spec(spec, spec_semaphore, test_semaphore, reporting,
-                       metadata=None, test_names=None, exclude=None, dry_run=False):
+                       metadata=None, test_names=None, exclude=None, dry_run=False,
+                       event_queue=None):
     if spec.__CASE_CONCURRENCY__:
         test_semaphore = spec.__CASE_CONCURRENCY__
     if spec.__SPEC_CONCURRENCY__:
@@ -203,7 +275,8 @@ async def execute_spec(spec, spec_semaphore, test_semaphore, reporting,
             return
 
         test_futures = [
-            execute_test_case(spec, func, test_semaphore, reporting, dry_run=dry_run)
+            execute_test_case(spec, func, test_semaphore, reporting, dry_run=dry_run,
+                              event_queue=event_queue)
             for func in spec.__test_cases__
         ]
         await asyncio.gather(*test_futures)
@@ -218,6 +291,7 @@ async def execute_spec(spec, spec_semaphore, test_semaphore, reporting,
             test_names,
             exclude,
             dry_run=dry_run,
+            event_queue=event_queue,
         )
         for child in spec.children
     ]
@@ -280,7 +354,8 @@ async def execute_method(method, semaphore, dry_run, *args, **kwargs):
     return True
 
 
-async def execute_test_case(spec, case, semaphore, reporting, dry_run, *args, **kwargs):
+async def execute_test_case(spec, case, semaphore, reporting, dry_run, *args,
+                            event_queue=None, **kwargs):
     spec.has_run = True
     data = get_case_data(case)
     if data.incomplete:
@@ -298,8 +373,29 @@ async def execute_test_case(spec, case, semaphore, reporting, dry_run, *args, **
             reporting.case_finished(spec, case)
             return
 
+    # Emit case-started event for non-skipped cases
+    if event_queue and not data.skip:
+        await event_queue.put({
+            'type': 'case-started',
+            'spec_id': spec._id,
+            'spec_name': type(spec).__name__,
+            'case_name': case.__name__,
+            'timestamp': time.time(),
+        })
+
     data.start_time = time.time()
-    await execute_method(getattr(spec, case.__name__), semaphore, dry_run, *args, **kwargs)
+    live_token = None
+    if event_queue and not data.skip:
+        live_token = _LIVE_CTX.set({
+            'queue': event_queue,
+            'spec_id': spec._id,
+            'case_name': case.__name__,
+        })
+    try:
+        await execute_method(getattr(spec, case.__name__), semaphore, dry_run, *args, **kwargs)
+    finally:
+        if live_token is not None:
+            _LIVE_CTX.reset(live_token)
     data.end_time = time.time()
 
     if not (data.skip or data.incomplete):
@@ -308,3 +404,27 @@ async def execute_test_case(spec, case, semaphore, reporting, dry_run, *args, **
             data.after_traces.extend(spec.after_each.__tracebacks__)
 
     reporting.case_finished(spec, case)
+
+    # Emit case-finished event
+    if event_queue:
+        case_data = CaseFormatData(spec, case)
+        if case_data.skipped or case_data.incomplete:
+            status = 'skipped'
+        elif case_data.successful:
+            status = 'passed'
+        else:
+            status = 'failed'
+
+        await event_queue.put({
+            'type': 'case-finished',
+            'spec_id': spec._id,
+            'spec_name': type(spec).__name__,
+            'case_name': case.__name__,
+            'status': status,
+            'duration': case_data.elapsed_time,
+            'details': {
+                'expects': [e.as_dict for e in case_data.expects],
+                'errors': case_data.errors,
+                'skip_reason': case_data.skip_reason,
+            },
+        })

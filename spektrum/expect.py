@@ -1,11 +1,16 @@
 import ast
 import copy
 import inspect
+from contextvars import ContextVar
 
 from spektrum import logger, utils
 from spektrum.spec import Spec
 from spektrum.exceptions import FailedRequireException
 from ast_decompiler import decompile
+
+# Holds { 'queue': asyncio.Queue, 'spec_id': str, 'case_name': str } when a
+# live run is active; None otherwise.  Set/reset by execute_test_case().
+_LIVE_CTX: ContextVar = ContextVar('_LIVE_CTX', default=None)
 
 log = logger.get(__name__)
 
@@ -28,10 +33,29 @@ class Expectation(object):
 
     def _verify_condition(self, condition):
         self.success = condition if not self.used_negative else not condition
+        self._emit_live_assertion()
         if self.required and not self.success:
             raise FailedRequireException()
 
         return self.success
+
+    def _emit_live_assertion(self):
+        ctx = _LIVE_CTX.get()
+        if ctx is None:
+            return
+        try:
+            ctx['queue'].put_nowait({
+                'type': 'assertion-added',
+                'spec_id': ctx['spec_id'],
+                'case_name': ctx['case_name'],
+                'assertion': {
+                    'evaluation': str(self),
+                    'success': self.success,
+                    'required': self.required,
+                },
+            })
+        except Exception:
+            pass
 
     def _compare(self, action_name, expected, condition):
         self.expected = expected
