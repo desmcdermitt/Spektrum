@@ -1,12 +1,19 @@
 from enum import Enum
 from datetime import datetime
 
-from spektrum import utils
-from spektrum.reporting.data import CaseFormatData, SpecFormatData
+from spektrum import (
+    logger,
+    utils,
+)
+from spektrum.reporting.data import (
+    CaseFormatData,
+    SpecFormatData,
+)
 from spektrum.reporting.transport import RetryTransport
 
 import httpx
 
+log = logger.get(__name__)
 UNICODE_SKIP = u'\u2607'
 UNICODE_SEP = u'\u221F'
 UNICODE_ARROW = u'\u2192'
@@ -49,79 +56,48 @@ class TestRailRenderer(object):
     def reconcile_spec_and_section(self, spec, metadata, test_names, exclude, sections=None):
         utils.filter_cases_by_data(spec, metadata, test_names, exclude)
 
-        spec_data = TestRailSpecData(spec)
-        self._ensure_spec_hierarchy(spec_data, sections)
-        self.specs[spec_data.id] = spec_data
+        spec = TestRailSpecData(spec)
 
-        for child in spec_data.specs:
+        tr_section = next(
+            (section for section in (sections or []) if section['name'] == spec.name),
+            None
+        )
+
+        if tr_section:
+            spec.section_id = tr_section.get('id')
+            spec.suite_id = tr_section.get('suite_id')
+
+        else:
+            parent_id = None
+            if spec.parent:
+                parent_id = self.specs[spec.parent.id].section_id
+
+            resp = self.tr.add_section(
+                self.project,
+                self.suite,
+                name=spec.name,
+                description='',
+                parent_id=parent_id,
+            )
+
+            result = resp.json()
+            spec.section_id = result['id']
+            spec.suite_id = result['suite_id']
+
+        self.specs[spec.id] = spec
+
+        for child in spec.specs:
+            child_sections = []
+            if tr_section:
+                child_sections = tr_section['children'].values()
+
             self.reconcile_spec_and_section(
                 child._spec,
                 metadata,
                 test_names,
                 exclude,
-                sections
+                child_sections
             )
-
-    def _ensure_spec_hierarchy(self, spec_data, sections=None):
-        class_hierarchy = self._get_class_hierarchy(spec_data._spec)
-        all_sections = self._get_all_sections()
-        parent_id = None
-
-        for i, class_name in enumerate(class_hierarchy):
-            section_name = utils.camelcase_to_spaces(class_name)
-            existing_section = self._find_existing_section(all_sections, section_name, parent_id)
-
-            if existing_section:
-                section_id = existing_section['id']
-                suite_id = existing_section['suite_id']
-            else:
-                resp = self.tr.add_section(
-                    self.project,
-                    self.suite,
-                    name=section_name,
-                    description='',
-                    parent_id=parent_id,
-                )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    section_id = result['id']
-                    suite_id = result['suite_id']
-                else:
-                    return
-
-            if i == len(class_hierarchy) - 1:
-                spec_data.section_id = section_id
-                spec_data.suite_id = suite_id
-
-            parent_id = section_id
-
-    def _get_class_hierarchy(self, spec):
-        qualname = spec.__class__.__qualname__
-        hierarchy = qualname.split('.')
-        return hierarchy
-
-    def _get_all_sections(self):
-        try:
-            response = self.tr.get_sections(self.project, self.suite)
-            if response.status_code == 200:
-                data = response.json()
-                sections = data.get('sections', [])
-                return sections
-            else:
-                return []
-        except Exception:
-            return []
-
-    def _find_existing_section(self, all_sections, name, parent_id):
-        for section in all_sections:
-            section_name = section.get('name', '')
-            section_parent_id = section.get('parent_id')
-
-            if section_name == name:
-                if parent_id == section_parent_id:
-                    return section
-
-        return None
 
     def track_top_level(self, specs, all_inherited, metadata, test_names, exclude):
         for spec in specs:
@@ -144,28 +120,18 @@ class TestRailRenderer(object):
                 suite_id=self.suite,
                 name=f'Spektrum {time}'
             )
-            if resp.status_code == 200:
-                self.run = resp.json()['id']
+            self.run = resp.json()['id']
 
     def report_case(self, spec, case):
-        case_data = TestRailCaseData(spec, case)
-        if spec._id not in self.specs:
-            return
-
-        cached_spec = self.specs[spec._id]
-        cached_case = next(
-            (c for c in cached_spec.cases if c.raw_name == case.__name__),
-            None
-        )
-
-        if cached_case and hasattr(cached_case, 'case_id'):
-            case_data.case_id = cached_case.case_id
-            case_data.section_id = cached_case.section_id
-        else:
-            case_data.case_id, case_data.section_id = self._create_case_on_demand(cached_spec, case)
-
-            if not case_data.case_id:
+        cached_data = self.get_cached_case_data(spec, case.__name__)
+        if not cached_data:
+            cached_data = self._create_case_on_demand(spec, case)
+            if not cached_data:
                 return
+
+        case_data = TestRailCaseData(spec, case)
+        case_data.case_id = cached_data.case_id
+        case_data.section_id = cached_data.section_id
 
         status = TestRailStatus.FAILED
         if case_data.skipped:
@@ -200,9 +166,6 @@ class TestRailRenderer(object):
                 for line in error:
                     lines.append(line)
 
-        if not self.run:
-            return
-
         self.tr.add_result_for_case(
             run_id=self.run,
             case_id=case_data.case_id,
@@ -217,61 +180,54 @@ class TestRailRenderer(object):
     def render(self, report):
         self.report = report
 
-    def _create_case_on_demand(self, cached_spec, case):
-        try:
-            raw_case_name = case.__name__ if hasattr(case, '__name__') else str(case)
-            if '_' in raw_case_name:
-                case_name = utils.snakecase_to_spaces(raw_case_name)
-            else:
-                case_name = utils.camelcase_to_spaces(raw_case_name)
+    def _create_case_on_demand(self, spec, case):
+        if spec._id not in self.specs:
+            return None
 
+        cached_spec = self.specs[spec._id]
+        raw_name = case.__name__
+        case_name = (
+            utils.snakecase_to_spaces(raw_name)
+            if '_' in raw_name
+            else utils.camelcase_to_spaces(raw_name)
+        )
+
+        try:
             tr_cases = self.tr.get_cases(self.project, cached_spec.suite_id, cached_spec.section_id)
-            tr_case = next(
-                (c for c in tr_cases if c['title'] == case_name),
-                None
-            )
+            tr_case = next((c for c in tr_cases if c['title'] == case_name), None)
 
             if tr_case:
                 case_id = tr_case['id']
                 section_id = tr_case['section_id']
             else:
-                resp = self.tr.add_case(
-                    cached_spec.section_id,
-                    case_name,
-                    template=self.template,
-                )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    case_id = result['id']
-                    section_id = result['section_id']
-                else:
-                    return None, None
+                resp = self.tr.add_case(cached_spec.section_id, case_name, template=self.template)
+                result = resp.json()
+                case_id = result['id']
+                section_id = result['section_id']
 
-            class CachedCase:
-                def __init__(self, case_id, section_id, raw_name, name):
-                    self.case_id = case_id
-                    self.section_id = section_id
-                    self.raw_name = raw_name
-                    self.name = name
+            cached_case = _CachedCase(case_id=case_id, section_id=section_id, raw_name=raw_name)
+            cached_spec.cases.append(cached_case)
+            return cached_case
 
-            new_case = CachedCase(
-                case_id=case_id,
-                section_id=section_id,
-                raw_name=raw_case_name,
-                name=case_name
-            )
-            cached_spec.cases.append(new_case)
-
-            return case_id, section_id
-
-        except Exception:
-            return None, None
+        except (httpx.HTTPError, KeyError, ValueError):
+            log.exception('Failed to create case on demand')
+            return None
 
     def get_cached_case_data(self, spec, raw_name):
+        if spec._id not in self.specs:
+            return None
         return next(
-            (case for case in self.specs[spec._id].cases if case.raw_name == raw_name),
+            (case for case in self.specs[spec._id].cases
+             if case.raw_name == raw_name and case.case_id),
             None
         )
+
+
+class _CachedCase(object):
+    def __init__(self, case_id: int, section_id: int, raw_name: str) -> None:
+        self.case_id = case_id
+        self.section_id = section_id
+        self.raw_name = raw_name
 
 
 class TestRailCaseData(CaseFormatData):
@@ -288,7 +244,6 @@ class TestRailSpecData(SpecFormatData):
         super().__init__(spec)
         self.section_id = None
         self.suite_id = None
-        self.cases = []
 
 
 class TestRailClient(object):
@@ -448,7 +403,7 @@ def structure_testrail_dict(data):
     depth_list = [v['depth'] for _, v in flattened.items()]
     max_depth = 1
 
-    if len(depth_list) > 0:
+    if depth_list:
         max_depth = max(depth_list)
 
     restructured = None
