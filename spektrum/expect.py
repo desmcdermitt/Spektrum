@@ -1,11 +1,21 @@
+import asyncio
 import ast
 import copy
 import inspect
+from contextvars import ContextVar
 
-from spektrum import logger, utils
+
+from spektrum import (
+    logger,
+    utils,
+)
 from spektrum.spec import Spec
 from spektrum.exceptions import FailedRequireException
 from ast_decompiler import decompile
+
+# Holds { 'queue': asyncio.Queue, 'spec_id': str, 'case_name': str } when a
+# live run is active; None otherwise.  Set/reset by execute_test_case().
+_LIVE_CTX: ContextVar = ContextVar('_LIVE_CTX', default=None)
 
 log = logger.get(__name__)
 
@@ -28,10 +38,29 @@ class Expectation(object):
 
     def _verify_condition(self, condition):
         self.success = condition if not self.used_negative else not condition
+        self._emit_live_assertion()
         if self.required and not self.success:
             raise FailedRequireException()
 
         return self.success
+
+    def _emit_live_assertion(self) -> None:
+        ctx = _LIVE_CTX.get()
+        if ctx is None:
+            return
+        try:
+            ctx['queue'].put_nowait({
+                'type': 'assertion-added',
+                'spec_id': ctx['spec_id'],
+                'case_name': ctx['case_name'],
+                'assertion': {
+                    'evaluation': str(self),
+                    'success': self.success,
+                    'required': self.required,
+                },
+            })
+        except (asyncio.QueueFull, RuntimeError):
+            pass
 
     def _compare(self, action_name, expected, condition):
         self.expected = expected
@@ -40,7 +69,12 @@ class Expectation(object):
 
     def __str__(self):
         action_list = copy.copy(self.actions)
-        action_list[0] = self.target_src_param or str(self.target)
+        src = self.target_src_param
+        # f-string source shows unevaluated placeholders and unicode escapes;
+        # use the already-evaluated value instead.
+        if src and src.lstrip().startswith(('f"', "f'", 'f"""', "f'''")):
+            src = None
+        action_list[0] = src or str(self.target)
         action_list[-1] = self.expected_src_param or str(self.expected)
 
         return ' '.join([str(action) for action in action_list])
@@ -234,7 +268,7 @@ def _find_last_spec():
 
 
 def _add_expect_to_spec(instance):
-    """Walks the stack back until it gets to a Spec and adds the expectation"""
+    '''Walks the stack back until it gets to a Spec and adds the expectation'''
     try:
         spec, frame = _find_last_spec()
 
@@ -254,8 +288,8 @@ def _add_expect_to_spec(instance):
             stack_frame = stack_frame.f_back
             depth += 1
 
-    except Exception as error:
-        raise Exception(
+    except (AttributeError, TypeError, KeyError, IndexError) as error:
+        raise RuntimeError(
             f'Error attempting to add expect to parent Spec: {error}'
         ) from error
 
@@ -292,17 +326,17 @@ def get_expect_params():
 
         expr_node = _get_closest_expression(expect_frame.f_lineno, node)
         return ExpectParams(expr_node)
-    except Exception:
+    except (AttributeError, TypeError, IndexError, ValueError):
         log.debug('Failed to get expect params... suppressing')
 
 
 def expect(obj, caller_args=None, **kwargs):
-    """Primary method for test assertions in Spektrum
+    '''Primary method for test assertions in Spektrum
 
     :param obj: The evaluated target object
     :param caller_args: Is only used when using expecting a raised Exception
     :param **kwargs: Kwargs passed through to the function.
-    """
+    '''
     src_params = get_expect_params()
     obj = Expectation(
         obj,
@@ -313,19 +347,19 @@ def expect(obj, caller_args=None, **kwargs):
 
     try:
         _add_expect_to_spec(obj)
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError):
         log.debug('Failed to to add expect to spec... suppressing')
 
     return obj
 
 
 def require(obj, caller_args=None, **kwargs):
-    """Primary method for test assertions in Spektrum
+    '''Primary method for test assertions in Spektrum
 
     :param obj: The evaluated target object
     :param caller_args: Is only used when using expecting a raised Exception
     :param **kwargs: Kwargs passed through to the function.
-    """
+    '''
     src_params = get_expect_params()
     obj = Requirement(
         obj,
@@ -336,7 +370,7 @@ def require(obj, caller_args=None, **kwargs):
 
     try:
         _add_expect_to_spec(obj)
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError):
         log.debug('Failed to to add require to spec... suppressing')
 
     return obj
@@ -355,7 +389,7 @@ class ExpectParams(object):
         'contain',
         'raise_a',
         'be_a_subset_of',
-        'be_a_superset_of'
+        'be_a_superset_of',
     ]
 
     def __init__(self, expr):

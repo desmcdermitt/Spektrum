@@ -97,8 +97,9 @@ class CaseFormatData(object):
 
             formatted = ['|  ' + line for line in tb['source']]
             formatted[-1] = '->' + formatted[-1][2:]
+            line_num = tb['line']
             formatted_tracebacks.append([
-                f'- {filename}:{tb["line"]}',
+                f'- {filename}:{line_num}',
                 separator,
                 *formatted,
                 separator,
@@ -106,7 +107,7 @@ class CaseFormatData(object):
 
         # Add the actual exception on the last one
         if formatted_tracebacks:
-            exc = tb["exception"]
+            exc = tb['exception']
             formatted_tracebacks[-1].extend([
                 f'- {type(exc).__name__}: {exc}',
                 separator,
@@ -168,11 +169,15 @@ class ExpectFormatData(object):
 
     @property
     def target_name(self):
-        return self._expect.src_params.expect_arg
+        if self._expect.src_params:
+            return self._expect.src_params.expect_arg
+        return str(self._expect.target)
 
     @property
     def expected_name(self):
-        return self._expect.src_params.cmp_arg
+        if self._expect.src_params:
+            return self._expect.src_params.cmp_arg
+        return str(self._expect.expected)
 
     @property
     def as_dict(self):

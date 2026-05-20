@@ -31,8 +31,8 @@ copyright = u'2021, LiquidWeb'
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 
-version = '1.2.2'
-release = '1.2.2'
+version = '1.3.0'
+release = '1.3.0'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -43,7 +43,7 @@ pygments_style = 'friendly'
 
 # -- Options for HTML output --
 
-html_theme = "sphinx_rtd_theme"
+html_theme = 'sphinx_rtd_theme'
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 # If true, links to the reST sources are added to the pages.
@@ -61,7 +61,7 @@ latex_elements = {
     'inputenc': '',
     'utf8extra': '',
     'fontenc': '',
-    'preamble': ''''''
+    'preamble': '''''',
 }
 
 latex_documents = [
@@ -76,7 +76,7 @@ latex_documents = [
 # (source start file, name, description, authors, manual section).
 man_pages = [
     ('index', 'spektrum', u'Spektrum Documentation',
-     [u'John Vrbanac'], 1)
+     [u'John Vrbanac'], 1),
 ]
 
 

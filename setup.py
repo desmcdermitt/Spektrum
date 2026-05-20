@@ -1,11 +1,14 @@
 import os
-from setuptools import setup, find_packages
+from setuptools import (
+    setup,
+    find_packages,
+)
 
 long_desc = None
 if os.path.exists('README.rst'):
     long_desc = open('README.rst').read()
 
-version = '1.2.2'
+version = '1.3.0'
 
 setup(
     name='Spektrum',
@@ -36,11 +39,11 @@ setup(
         'httpx>=0.23.0',
         'python-dateutil>=2.8.2',
         'pyyaml',
-        'ast-decompiler'
+        'ast-decompiler',
     ],
     entry_points = {
         'console_scripts': [
-            'spektrum = spektrum.__main__:main'
-        ]
+            'spektrum = spektrum.__main__:main',
+        ],
     },
 )
