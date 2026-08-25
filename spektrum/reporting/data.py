@@ -169,13 +169,18 @@ class ExpectFormatData(object):
 
     @property
     def target_name(self):
-        if self._expect.src_params:
+        # The source expression is a best effort: it is absent whenever the
+        # statement behind the assertion was not an `expect(X).to.matcher(Y)`
+        # call. Fall back to the value rather than labelling it `None`, and test
+        # the resolved name rather than the params object, the way
+        # `Expectation.target_src_param` already does.
+        if self._expect.src_params and self._expect.src_params.expect_arg:
             return self._expect.src_params.expect_arg
         return str(self._expect.target)
 
     @property
     def expected_name(self):
-        if self._expect.src_params:
+        if self._expect.src_params and self._expect.src_params.cmp_arg:
             return self._expect.src_params.cmp_arg
         return str(self._expect.expected)
 
