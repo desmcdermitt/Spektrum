@@ -58,6 +58,9 @@ class TestRailRenderer(object):
 
         spec = TestRailSpecData(spec)
 
+        if not _has_selected_cases(spec):
+            return
+
         tr_section = next(
             (section for section in (sections or []) if section['name'] == spec.name),
             None
@@ -365,6 +368,19 @@ class TestRailClient(object):
             params=parameters,
             timeout=30
         )
+
+
+def _has_selected_cases(spec):
+    '''Whether `spec` or any of its descendants has a case surviving selection.
+
+    `filter_cases_by_data` only trims each spec's own `__test_cases__`; it never
+    removes a spec from its parent's children. Without this check,
+    `reconcile_spec_and_section` would create a TestRail section for every spec
+    discovered under the search path, regardless of `--select-by-metadata` /
+    `--select-tests` / `--exclude-by-metadata`, flooding the suite with sections
+    that have no cases in them.
+    '''
+    return bool(spec.cases) or any(_has_selected_cases(child) for child in spec.specs)
 
 
 def restructure(sections, level=0, structured=None):
