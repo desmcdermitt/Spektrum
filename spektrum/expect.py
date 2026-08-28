@@ -397,31 +397,54 @@ class ExpectParams(object):
 
     @property
     def cmp_call(self):
-        if self.expect_exp:
+        # `_get_closest_expression` falls back to the nearest expression statement
+        # whenever the calling line holds none of its own, so this can be any
+        # expression at all -- a bare `await`, a plain `helper()` call, a
+        # docstring. Only a call can be an `expect(X).to.matcher(Y)` chain, and
+        # everything below walks this node, so reject anything else up front.
+        if self.expect_exp and isinstance(self.expect_exp.value, ast.Call):
             return self.expect_exp.value
 
     @property
     def expect_call(self):
-        if self.cmp_call:
-            return self.cmp_call.func.value.value
+        # Verify the whole `expect(X).to.matcher(Y)` shape rather than trusting
+        # it. A bare `helper()` is a call whose func is a Name, and `self.a.b()`
+        # is a call whose func chain bottoms out somewhere other than a call.
+        cmp_call = self.cmp_call
+        if cmp_call is None or not isinstance(cmp_call.func, ast.Attribute):
+            return None
+
+        matcher_owner = cmp_call.func.value
+        if not isinstance(matcher_owner, ast.Attribute):
+            return None
+
+        expect_call = matcher_owner.value
+
+        return expect_call if isinstance(expect_call, ast.Call) else None
 
     @property
     def cmp_type(self):
-        if self.cmp_call:
-            return self.cmp_call.func.attr
+        cmp_call = self.cmp_call
+        if cmp_call is not None and isinstance(cmp_call.func, ast.Attribute):
+            return cmp_call.func.attr
 
     @property
     def cmp_arg(self):
         arg = None
-        if self.cmp_type in self.types_with_args:
+        # A matcher may still be written without its argument, so the argument
+        # list is not guaranteed to be populated just because the type matches.
+        if self.cmp_type in self.types_with_args and self.cmp_call.args:
             arg = decompile(self.cmp_call.args[0])
         return arg
 
     @property
     def expect_type(self):
-        return self.expect_call.func.id
+        expect_call = self.expect_call
+        if expect_call is not None and isinstance(expect_call.func, ast.Name):
+            return expect_call.func.id
 
     @property
     def expect_arg(self):
-        if self.expect_call:
-            return decompile(self.expect_call.args[0])
+        expect_call = self.expect_call
+        if expect_call is not None and expect_call.args:
+            return decompile(expect_call.args[0])
