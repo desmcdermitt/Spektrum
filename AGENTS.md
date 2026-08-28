@@ -85,7 +85,9 @@ Not derivable at a glance, and easy to get wrong:
 │   ├── specs/             # capability baseline (the six live-view capabilities)
 │   └── changes/           # in-flight proposals, plus archive/ of completed ones
 ├── tools/run_tests.sh     # stale — calls nosetests; use the commands below instead
-├── .claude/conventions.md # Python standards
+├── .claude/
+│   ├── conventions.md     # Python standards
+│   └── skills/cut-a-release/  # "let's cut a new release" -> tools/release.sh
 ├── tox.ini                # pytest+coverage envs, the flake8 env, and the flake8 config
 └── setup.py               # version lives here and in .bumpversion.cfg
 ```
@@ -179,9 +181,25 @@ py36–py39 + pypy3, and CI tests only 3.12. Treat **3.12 as the supported versi
 the only one actually exercised — and don't take the other two as constraints without
 asking.
 
-Releasing is `bumpversion`, which updates `setup.py` and `docs/conf.py` together, commits,
-and tags. The tag is what publishes to PyPI from CI, so a version bump in an ordinary PR
-ships a release by accident.
+**Pushing a tag to `liquidweb/Spektrum` is the release.** Travis builds every tag and
+uploads to PyPI (`deploy.on.tags: true` in `.travis.yml`). Nothing else publishes — not
+merging to `master`, not running `bumpversion`. The inverse worry is the one to drop: a
+version bump merged in an ordinary PR ships nothing at all, which is exactly how 1.2.2 and
+1.3.0 came to sit on `master` having never reached PyPI.
+
+Use `tools/release.sh`. Run it with no arguments and it detects the state and does the
+next right thing; `status`, `release <part>` and `publish` are there when you already know
+it. In a session, "let's cut a new release" reaches it through
+[.claude/skills/cut-a-release/](.claude/skills/cut-a-release/SKILL.md) — drive the script,
+never reproduce its steps. It refuses rather than warns.
+
+Every PR adds its own entry under `Next Release` in `docs/release_notes/index.rst`. The
+release renames that section to the version it becomes; an empty one is refused.
+
+The two traps the script exists to close: `bumpversion` tags the commit it runs on, which
+on a branch is the pre-merge commit the merge then rewrites; and `git push origin --tags`
+sends the tag to a personal fork that CI does not watch. Full process:
+[docs/maintenance/index.rst](docs/maintenance/index.rst).
 
 ## See also
 

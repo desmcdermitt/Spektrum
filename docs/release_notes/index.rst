@@ -4,6 +4,60 @@
 Release Notes
 =================
 
+Next Release
+--------------------------------
+
+*Nothing yet.*
+
+Release: 1.3.1
+--------------------------------
+
+Features and bug fixes
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+ #. Fixing crash where a run that completed every test lost its entire
+    report at render time, whenever the source expression behind an
+    assertion could not be resolved to an expect(X).to.matcher(Y) call -
+    gh-#15
+ #. Fixing assertion output falling back to the label None instead of the
+    value when the source expression is unavailable - gh-#15
+ #. Fixing TestRail sections being created for specs whose cases were all
+    deselected, leaving empty sections in a shared suite after a run
+    narrowed by --select-by-metadata, --select-tests or
+    --exclude-by-metadata - gh-#17
+ #. Adding contributor and agent documentation - AGENTS.md, CONTRIBUTING.md
+    and a pull request template - and documenting test selection with -p,
+    -t and -m in the README - gh-#16
+ #. Defining the release process - tools/release.sh runs it, interactively
+    when given no arguments, and docs/maintenance/index.rst documents it. The
+    instructions it replaces produced version tags that never reached PyPI,
+    which is why 1.2.2 and 1.3.0 were never published. Release notes now
+    accumulate under a Next Release section as each change merges, rather than
+    being reconstructed at release time - gh-#18
+
+Release: 1.3.0
+--------------------------------
+
+Features and bug fixes
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+ #. Adding a live progress view - --live starts an HTTP server for the
+    duration of the run, with --live-port to choose the port (default 7777)
+    and --live-linger to hold the server open once the run finishes
+    (default 5 seconds) - gh-#14
+ #. Streaming spec discovery, case results and individual assertions to the
+    live view as the run progresses, rather than only at the end - gh-#14
+ #. Fixing assertion output for f-string targets, which rendered the
+    unevaluated placeholder text and unicode escapes instead of the
+    evaluated value - gh-#14
+ #. Fixing TestRail results being dropped for any case missing from the
+    section cache - the case is now created at report time and titled from
+    the spaced form of the method name - gh-#13, gh-#14
+ #. Narrowing the exception handling around expect source lookup, which
+    caught bare Exception and re-raised failures as Exception; it now
+    catches the specific errors it can recover from and raises RuntimeError
+    - gh-#14
+
 Release: 1.0.0
 --------------------------------
 

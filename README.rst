@@ -98,9 +98,23 @@ See the `contributing guide
 <https://github.com/liquidweb/spektrum/blob/master/CONTRIBUTING.md>`_ for setup, the test
 suites, and what a change needs to prove before review.
 
-Release Notes
-~~~~~~~~~~~~~~
+Releases
+~~~~~~~~~
 
-- `Release notes
-  <https://github.com/liquidweb/spektrum/blob/master/docs/release_notes/index.rst>`__ are
-  available in the documentation
+Spektrum is published to PyPI at https://pypi.org/project/Spektrum/::
+
+    pip install spektrum
+
+Releases are cut every week or two, and only when something has merged — a quiet fortnight
+produces no release.
+
+`Release notes
+<https://github.com/liquidweb/spektrum/blob/master/docs/release_notes/index.rst>`__ live in
+the documentation. The section at the top, ``Next Release``, is the accumulating draft of
+the next version: **if your PR changes behaviour, add your entry there as part of it.** The
+release renames that section to the version it becomes, so the note written at review time
+is the note that ships.
+
+Maintainers: the procedure is in `docs/maintenance/index.rst
+<https://github.com/liquidweb/spektrum/blob/master/docs/maintenance/index.rst>`__, and
+``./tools/release.sh`` runs it.
