@@ -71,15 +71,32 @@
 
 ## 5. Enforce the workflow in CI
 
-- [ ] 5.1 Add `.github/workflows/` with a job that fails when the diff touches `spektrum/`
-      and nothing under `openspec/`. Honour a `no-spec` label as the escape hatch.
-- [ ] 5.2 Add `openspec validate --all` to that workflow, on Node, so a malformed spec or
-      change is caught rather than merely a missing one.
-- [ ] 5.3 Name the workflow for what it checks, and state in `CONTRIBUTING.md` which CI
-      system owns tests and lint versus which owns process, so a contributor can tell which
-      red build matters.
-- [ ] 5.4 Land this group **after** section 2, so the gate's first run is not the PR that
-      introduces it failing against itself.
+> **Struck: superseded by `add-openspec-ci-gate` (Linear COS-31),** which owns the CI gate.
+> This group is recorded rather than deleted so the decision stays legible and the workflow
+> is not built twice. Three of its four points are reversed there, and one is kept.
+>
+> - `5.1`'s `^spektrum/` watched path is replaced by a rule expressed in no paths at all: a
+>   pull request carries a spec file or declares an exception. A watched path fails *open* —
+>   it silently stops applying to any directory added after it was written — and cannot be
+>   shared with repositories of a different layout.
+> - `5.2`'s `openspec validate --all` gains `--strict`, so a warning is a failure rather
+>   than a note nobody reads.
+> - `5.3`'s description of the check as merge-blocking is reversed: the check goes red and is
+>   never configured as a required check. Whoever merges over it takes responsibility. Its
+>   other half — stating in `CONTRIBUTING.md` which CI system owns tests versus process —
+>   survives, and Travis-versus-Actions ownership is carried by the new change.
+>
+> **`5.1`'s escape hatch is kept, not reversed.** Wanting a way for an author to say "no
+> spec, and here is why" was the right call, and it is exactly what the organisation's own
+> rule provides. Only the mechanism is refined: a `no-spec` label is one click that carries
+> no reason, while `sdd-exception: (.+)` requires a written reason in the description, where
+> a reviewer is already reading and where the job echoes it into its log.
+>
+> `5.4`'s sequencing conclusion was reached independently by the new change and still holds:
+> the gate's first run must not be the pull request that introduces it, failing against
+> itself.
+>
+> Nothing else in this change is affected; sections 1-4 and 6-8 stand.
 
 ## 6. Inventory the spec gap
 

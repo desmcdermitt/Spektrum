@@ -1,0 +1,143 @@
+# Process checks, not code checks.
+#
+# Travis owns the tests, the lint and the tagged PyPI deploy — it tells you whether the code
+# works. This workflow owns only the artifacts under `openspec/` — it tells you whether the
+# process was followed. Keeping them apart means a contributor can always answer "which red
+# build matters": red here is paperwork, red on Travis is code.
+#
+# Nothing in this file may grow into a code check. A test, a linter or a type check belongs in
+# Travis, however convenient it would be to add it to the workflow that already exists.
+#
+# It implements an organisation requirement: a pull request passes if a spec file is in the
+# diff, or if its description carries an `sdd-exception: <reason>` line. The contract these
+# jobs are written against is openspec/specs/sdd-ci-gate/spec.md.
+#
+# Two things here are deliberate:
+#
+#   1. Both jobs fail the build. `openspec validate --strict` failing means an artifact is
+#      broken. The gate failing means a pull request neither stated a contract nor said why
+#      not. Neither is advisory, and `continue-on-error` is not used: it renders as a muted
+#      warning and gets scrolled past.
+#
+#   2. Neither job is a required status check, and this file must not be paired with branch
+#      protection that makes it one. The check goes red and whoever merges takes
+#      responsibility. Since any author can state an exception in one sentence, a red gate
+#      means they declined to give a reason — which is worth seeing and not worth blocking on.
+#
+# Pull requests arrive from personal forks, so `GITHUB_TOKEN` is read-only and secrets are
+# unavailable. Both jobs need only `npm install` and `git diff`, so that is fine.
+
+name: Spec-driven development
+
+# `edited` is load-bearing, not tidiness. A re-run of a `pull_request` run replays the
+# ORIGINAL event payload, so `github.event.pull_request.body` is the body as it was when the
+# run was first triggered -- editing the description and pressing "re-run" does NOT pick up a
+# newly added exception line. Observed, not assumed. Listening for `edited` means editing the
+# description fires a fresh event with the new body and the gate re-decides on its own. The
+# cost is an extra run when someone edits a title, which is cheap.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+env:
+  OPENSPEC_PACKAGE: "@fission-ai/openspec@^1.12.0"
+
+jobs:
+  validate:
+    name: OpenSpec artifacts are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The scoped name is load-bearing. The unscoped `openspec` package on npm is a
+      # different package entirely; installing it either fails or silently exercises
+      # something other than the tool this repository is validated by.
+      - name: Install the OpenSpec CLI
+        run: npm install --global --silent "$OPENSPEC_PACKAGE"
+
+      # `--strict` promotes a warning to a failure. Without it a placeholder Purpose or a
+      # mis-numbered task list passes quietly, which is how a spec set rots while looking green.
+      - name: openspec validate --all --strict
+        run: openspec validate --all --strict
+
+  change-document:
+    name: A spec file, or a stated exception
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the verdict is taken over the pull request's whole diff, base to
+      # head, so the history has to be present. A shallow clone cannot diff against the base.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The description is written by whoever opened the pull request, so it is untrusted
+          # input. It is passed through the environment and matched as data. It is NOT
+          # interpolated into the script below: `${{ github.event.pull_request.body }}` placed
+          # inside a `run:` block is substituted into the shell source before it executes, so
+          # a body containing backticks or $(...) runs as commands with this job's access.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+
+          echo "Files considered:"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+          echo
+
+          # Condition 1: a spec file. A spec.md under a change's specs/ (a requirement delta)
+          # or under openspec/specs/ (the agreed baseline). A proposal, design or task list is
+          # NOT a spec file: a proposal states motivation, a spec states the contract.
+          spec_files="$(printf '%s\n' "$changed" \
+            | grep -E '^openspec/(specs/.+/spec\.md|changes/[^/]+/specs/.+/spec\.md)$' || true)"
+
+          if [ -n "$spec_files" ]; then
+            echo "PASS: the diff carries a spec file."
+            printf '%s\n' "$spec_files" | sed 's/^/  /'
+            exit 0
+          fi
+
+          # Condition 2: a stated exception. The captured reason must contain at least one
+          # non-whitespace character — a bare marker is not a reason.
+          reason="$(printf '%s\n' "$PR_BODY" \
+            | sed -n 's/^[[:space:]]*sdd-exception:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' \
+            | head -1)"
+
+          if [ -n "$reason" ]; then
+            echo "PASS: no spec file, but an exception is declared."
+            # Echoed so the justification survives in the build log, not only in a description
+            # field that can be edited afterwards. Printed as data, never re-evaluated.
+            printf 'sdd-exception: %s\n' "$reason"
+            exit 0
+          fi
+
+          echo "FAIL: this pull request carries no spec file and declares no exception."
+          echo
+          echo "This project is developed spec-first. Satisfy either condition:"
+          echo
+          echo "  1. Include a spec file in the diff — a spec.md under"
+          echo "     openspec/changes/<change>/specs/ or under openspec/specs/."
+          echo "     Start a change with:  openspec new change \"<name>\""
+          echo
+          echo "  2. Or state why one is not appropriate, by adding a line to this pull"
+          echo "     request's description:"
+          echo
+          echo "       sdd-exception: <your reason>"
+          echo
+          echo "Add the line and this check re-runs by itself — this workflow listens for"
+          echo "description edits. Do not use the \"Re-run\" button for that: a re-run replays"
+          echo "the original event, so it will not see your edit."
+          echo
+          echo "This check does not block the merge. If you merge over it, that is yours to own."
+          exit 1

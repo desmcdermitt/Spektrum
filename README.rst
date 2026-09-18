@@ -13,6 +13,44 @@ testing framework that adopted a more code-centric approach to BDD.
 
 Spektrum is open-source and is available on `GitHub`_. We love contributions!
 
+Spec-driven development
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+**This project is spec-driven, and OpenSpec is its only planning system.** Anything beyond a
+trivial fix starts as a change under ``openspec/changes/`` — a proposal, spec deltas, a design
+and tasks — before the code is written, and ``openspec/specs/`` holds the agreed requirements
+the library is held to. Read the relevant spec before changing behaviour, and delta it rather
+than restating it.
+
+The CLI is a Node package, separate from the Python toolchain::
+
+    npm install -g @fission-ai/openspec   # >= 1.12.0
+    openspec list          # in-flight changes
+    openspec list --specs  # the requirement baseline
+    openspec validate --all --strict      # what CI runs
+
+Two checks run on every pull request, and both fail the build:
+
+* **validate** runs ``openspec validate --all --strict``. A spec or change that does not parse
+  is broken rather than untidy — it is invisible to ``openspec list``, it cannot be archived,
+  and it has quietly stopped describing anything.
+* **change-document** requires the pull request either to include a **spec file** — a
+  ``spec.md`` under ``openspec/changes/<change>/specs/`` or under ``openspec/specs/`` — or to
+  state why one is not appropriate.
+
+A proposal, design or task list on its own is not a spec file: a proposal states motivation, a
+spec states the contract. There is no exemption by path, so a documentation-only pull request
+is covered like any other. To state an exception, add a line to the pull request description::
+
+    sdd-exception: dependency bump, no behaviour change
+
+The reason is required — a bare ``sdd-exception:`` fails — and the job echoes it into its log,
+so the justification survives in the build record.
+
+**Neither check blocks a merge.** They go red, and whoever merges over a red check takes
+responsibility. Travis owns the tests and the lint; these two own only the ``openspec/``
+artifacts. Red here is paperwork; red on Travis is code.
+
 Getting Started
 ~~~~~~~~~~~~~~~~
 
